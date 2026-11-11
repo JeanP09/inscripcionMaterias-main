@@ -1,0 +1,6 @@
+# Override local: el puerto 80 de esta máquina lo usa Apache (XAMPP),
+# así que el frontend se publica en http://localhost:8080.
+services:
+  frontend:
+    ports: !override
+      - "8080:80"
