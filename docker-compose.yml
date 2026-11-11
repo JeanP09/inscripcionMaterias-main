@@ -1,0 +1,146 @@
+# =============================================================================
+# docker-compose.yml — Sistema de Inscripción de Materias (pila completa)
+#
+# RED INTERNA: todos los servicios comparten la red "inscripcion_net".
+#   * El navegador solo habla con el FRONTEND (Nginx, puerto 80).
+#   * Nginx reenvía /api/ -> http://backend:8000 por la red interna.
+#   * Por eso el frontend usa rutas relativas y NO necesita CORS.
+#
+# Puesta en marcha:
+#   docker compose up -d --build
+#   Frontend:   http://localhost
+#   API docs:   http://localhost:8000/docs
+#
+# Datos reales (Data-Driven): tras levantar, cargar los CSV con
+#   pip install pandas pyarrow psycopg2-binary
+#   python datalake/ingesta_datalake.py
+# =============================================================================
+
+services:
+  backend:
+    # Contexto = raíz del repo para poder copiar datalake/ y seed_reglas.py.
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: inscripcion_backend
+    # Garantiza que TODAS las tablas existan antes de aceptar peticiones.
+    # (init_db.py reintenta la conexión si PostgreSQL aún está arrancando.)
+    command:
+      [
+        "sh",
+        "-c",
+        "python init_db.py && exec uvicorn main:app --host 0.0.0.0 --port 8000",
+      ]
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: universidad
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: inscripcion
+      # Carpeta donde se guardan los CSV subidos por el admin/estudiante.
+      UPLOADS_DIR: /app/uploads
+    volumes:
+      - uploads_data:/app/uploads
+      # Persistencia de las capas Bronze/Silver del Data Lake.
+      - lake_bronze:/app/datalake/bronze
+      - lake_silver:/app/datalake/silver
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+    healthcheck:
+      # El endpoint "/" no toca la BD: sirve para saber que uvicorn ya escucha.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/').status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - inscripcion_net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Vacío => la SPA llama a rutas relativas /api y Nginx proxya a backend.
+        VITE_API_URL: ""
+    container_name: inscripcion_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - inscripcion_net
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: inscripcion_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: universidad
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d universidad"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - inscripcion_net
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: inscripcion_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./mongo_schema.js:/docker-entrypoint-initdb.d/01-schema.js:ro
+    networks:
+      - inscripcion_net
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5
+    container_name: inscripcion_neo4j
+    environment:
+      NEO4J_AUTH: neo4j/password
+    ports:
+      - "7474:7474"   # consola web
+      - "7687:7687"   # bolt
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - inscripcion_net
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  mongo_data:
+  neo4j_data:
+  uploads_data:
+  lake_bronze:
+  lake_silver:
+
+networks:
+  inscripcion_net:
+    driver: bridge

@@ -1,0 +1,14 @@
+# Dependencias del backend (FastAPI).
+# pandas se incluye por requerimiento del proyecto (aunque el core usa psycopg2).
+# pymongo: catálogo (catalogo_materias) y reglas dinámicas (reglas_negocio).
+fastapi
+uvicorn[standard]
+psycopg2-binary
+pandas
+pymongo
+# multipart/form-data: obligatorio para POST /api/admin/upload-oferta y
+# POST /api/estudiante/upload-matriz (UploadFile/File/Form de FastAPI).
+python-multipart
+# pyarrow: engine de pandas.to_parquet usado por datalake/ingesta_datalake.py
+# (capa Silver del Data Lake).
+pyarrow
